@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { Client, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
@@ -6,9 +7,11 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const os = require('os');
 
-const mongoUrl = 'mongodb+srv://<user>:<pass>@cluster0.mongodb.net/whatsapp?retryWrites=true&w=majority';
+let lastSentTitles = [];
+let subscribers = new Set();
 
-mongoose.connect(mongoUrl).then(() => {
+// MongoDB setup
+mongoose.connect(process.env.MONGO_URI).then(() => {
     console.log('✅ MongoDB connected!');
 });
 
@@ -16,14 +19,12 @@ const store = new MongoStore({ mongoose });
 
 const client = new Client({
     authStrategy: new RemoteAuth({
-        store: store,
+        store,
         backupSyncIntervalMs: 300000
     })
 });
 
-let lastSentTitles = [];
-let subscribers = new Set();
-
+// Generate QR
 client.on('qr', qr => {
     qrcode.generate(qr, { small: true });
     console.log('📱 Silakan scan QR code untuk login');
@@ -32,28 +33,26 @@ client.on('qr', qr => {
 client.on('ready', () => {
     console.log('🤖 Bot WhatsApp siap digunakan!');
 
+    // Kirim berita otomatis setiap 5 menit
     setInterval(async () => {
-        try {
-            const newNews = await getIDXNewsForAutoSend();
-            if (newNews.length > 0) {
-                for (const chatId of subscribers) {
-                    for (const berita of newNews) {
-                        await client.sendMessage(chatId, berita);
-                    }
+        const newNews = await getIDXNewsForAutoSend();
+        if (newNews.length > 0) {
+            for (const chatId of subscribers) {
+                for (const berita of newNews) {
+                    await client.sendMessage(chatId, berita);
                 }
-                newNews.forEach(n => {
-                    const title = n.split('\n')[1].replace(/\*/g, '');
-                    lastSentTitles.push(title);
-                });
-            } else {
-                console.log('ℹ️ Tidak ada berita baru saat ini.');
             }
-        } catch (err) {
-            console.error('❌ Error saat cek berita otomatis:', err);
+            newNews.forEach(n => {
+                const title = n.split('\n')[1].replace(/\*/g, '');
+                lastSentTitles.push(title);
+            });
+        } else {
+            console.log('🕵️ Tidak ada berita baru saat ini.');
         }
     }, 5 * 60 * 1000);
 });
 
+// Komando
 client.on('message', async msg => {
     const lower = msg.body.toLowerCase().trim();
 
@@ -79,45 +78,17 @@ client.on('message', async msg => {
             msg.reply('❌ Tidak ditemukan berita terbaru dari IDX Channel.');
         }
     } else if (lower === '!info') {
-        const totalMemMB = (os.totalmem() / 1024 / 1024).toFixed(2);
-        const freeMemMB = (os.freemem() / 1024 / 1024).toFixed(2);
-        const usedMemMB = (totalMemMB - freeMemMB).toFixed(2);
-        const cpus = os.cpus();
-        const cpuModel = cpus[0].model;
-        const cpuSpeedMHz = cpus[0].speed;
-        const uptimeSeconds = os.uptime();
-        const uptimeHours = Math.floor(uptimeSeconds / 3600);
-        const uptimeMinutes = Math.floor((uptimeSeconds % 3600) / 60);
-        const uptimeSecs = Math.floor(uptimeSeconds % 60);
-        const nodeVersion = process.version;
-        const platform = os.platform();
-        const arch = os.arch();
-
-        const infoMsg = 
-`🤖 *Info Bot Sistem* 🤖
-
-• RAM Total: ${totalMemMB} MB
-• RAM Terpakai: ${usedMemMB} MB
-• RAM Free: ${freeMemMB} MB
-
-• CPU: ${cpuModel}
-• CPU Speed: ${cpuSpeedMHz} MHz
-
-• OS: ${platform} (${arch})
-• Node.js Version: ${nodeVersion}
-
-• Bot Uptime: ${uptimeHours} jam ${uptimeMinutes} menit ${uptimeSecs} detik`;
-
-        await msg.reply(infoMsg);
+        await msg.reply(getSystemInfo());
     }
 });
 
+// Scraper berita
 async function getIDXNews() {
     try {
         const { data } = await axios.get('https://www.idxchannel.com/market-news');
         const $ = cheerio.load(data);
-        const articles = [];
 
+        const articles = [];
         $('.title_news').slice(0, 3).each((i, el) => {
             const title = $(el).text().trim();
             const url = $(el).find('a').attr('href');
@@ -141,12 +112,11 @@ async function getIDXNewsForAutoSend() {
     try {
         const { data } = await axios.get('https://www.idxchannel.com/market-news');
         const $ = cheerio.load(data);
-        const newArticles = [];
 
+        const newArticles = [];
         $('.title_news').each((i, el) => {
             const title = $(el).text().trim();
             const url = $(el).find('a').attr('href');
-
             if (title && url && !lastSentTitles.includes(title)) {
                 newArticles.push(`📢 *Berita Baru dari IDX Channel:*\n*${title}*\n${url}`);
             }
@@ -159,4 +129,25 @@ async function getIDXNewsForAutoSend() {
     }
 }
 
+// Info sistem
+function getSystemInfo() {
+    const totalMem = (os.totalmem() / 1024 / 1024).toFixed(2);
+    const freeMem = (os.freemem() / 1024 / 1024).toFixed(2);
+    const usedMem = (totalMem - freeMem).toFixed(2);
+    const cpus = os.cpus();
+    const uptime = os.uptime();
+
+    return `🤖 *Info Bot Sistem*
+
+• RAM Total: ${totalMem} MB
+• RAM Terpakai: ${usedMem} MB
+• RAM Free: ${freeMem} MB
+
+• CPU: ${cpus[0].model} (${cpus[0].speed} MHz)
+• OS: ${os.platform()} (${os.arch()})
+• Node.js: ${process.version}
+• Uptime: ${Math.floor(uptime / 3600)} jam ${(uptime % 3600) / 60 | 0} menit`;
+}
+
+// Start bot
 client.initialize();
