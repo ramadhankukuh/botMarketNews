@@ -1,11 +1,24 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, RemoteAuth } = require('whatsapp-web.js');
+const { MongoStore } = require('wwebjs-mongo');
+const mongoose = require('mongoose');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const os = require('os');
 
+const mongoUrl = 'mongodb+srv://<user>:<pass>@cluster0.mongodb.net/whatsapp?retryWrites=true&w=majority';
+
+mongoose.connect(mongoUrl).then(() => {
+    console.log('✅ MongoDB connected!');
+});
+
+const store = new MongoStore({ mongoose });
+
 const client = new Client({
-    authStrategy: new LocalAuth()
+    authStrategy: new RemoteAuth({
+        store: store,
+        backupSyncIntervalMs: 300000
+    })
 });
 
 let lastSentTitles = [];
@@ -13,11 +26,11 @@ let subscribers = new Set();
 
 client.on('qr', qr => {
     qrcode.generate(qr, { small: true });
-    console.log('Silakan scan QR code untuk login');
+    console.log('📱 Silakan scan QR code untuk login');
 });
 
 client.on('ready', () => {
-    console.log('Bot WhatsApp siap digunakan!');
+    console.log('🤖 Bot WhatsApp siap digunakan!');
 
     setInterval(async () => {
         try {
@@ -33,10 +46,10 @@ client.on('ready', () => {
                     lastSentTitles.push(title);
                 });
             } else {
-                console.log('Tidak ada berita baru saat ini.');
+                console.log('ℹ️ Tidak ada berita baru saat ini.');
             }
         } catch (err) {
-            console.error('Error saat cek berita otomatis:', err);
+            console.error('❌ Error saat cek berita otomatis:', err);
         }
     }, 5 * 60 * 1000);
 });
@@ -66,20 +79,16 @@ client.on('message', async msg => {
             msg.reply('❌ Tidak ditemukan berita terbaru dari IDX Channel.');
         }
     } else if (lower === '!info') {
-        // Info sistem
         const totalMemMB = (os.totalmem() / 1024 / 1024).toFixed(2);
         const freeMemMB = (os.freemem() / 1024 / 1024).toFixed(2);
         const usedMemMB = (totalMemMB - freeMemMB).toFixed(2);
-
         const cpus = os.cpus();
         const cpuModel = cpus[0].model;
         const cpuSpeedMHz = cpus[0].speed;
-
         const uptimeSeconds = os.uptime();
         const uptimeHours = Math.floor(uptimeSeconds / 3600);
         const uptimeMinutes = Math.floor((uptimeSeconds % 3600) / 60);
         const uptimeSecs = Math.floor(uptimeSeconds % 60);
-
         const nodeVersion = process.version;
         const platform = os.platform();
         const arch = os.arch();
@@ -97,8 +106,7 @@ client.on('message', async msg => {
 • OS: ${platform} (${arch})
 • Node.js Version: ${nodeVersion}
 
-• Bot Uptime: ${uptimeHours} jam ${uptimeMinutes} menit ${uptimeSecs} detik
-`;
+• Bot Uptime: ${uptimeHours} jam ${uptimeMinutes} menit ${uptimeSecs} detik`;
 
         await msg.reply(infoMsg);
     }
@@ -108,7 +116,6 @@ async function getIDXNews() {
     try {
         const { data } = await axios.get('https://www.idxchannel.com/market-news');
         const $ = cheerio.load(data);
-
         const articles = [];
 
         $('.title_news').slice(0, 3).each((i, el) => {
@@ -125,7 +132,7 @@ async function getIDXNews() {
             return null;
         }
     } catch (error) {
-        console.error('Gagal scraping IDX:', error.message);
+        console.error('❌ Gagal scraping IDX:', error.message);
         return null;
     }
 }
@@ -134,7 +141,6 @@ async function getIDXNewsForAutoSend() {
     try {
         const { data } = await axios.get('https://www.idxchannel.com/market-news');
         const $ = cheerio.load(data);
-
         const newArticles = [];
 
         $('.title_news').each((i, el) => {
@@ -148,7 +154,7 @@ async function getIDXNewsForAutoSend() {
 
         return newArticles;
     } catch (error) {
-        console.error('Gagal scraping IDX (auto):', error.message);
+        console.error('❌ Gagal scraping IDX (auto):', error.message);
         return [];
     }
 }
